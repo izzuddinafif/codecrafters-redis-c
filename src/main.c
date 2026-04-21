@@ -1,11 +1,41 @@
+#include "arpa/inet.h"
+#include "sys/types.h"
 #include <errno.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+ssize_t send_all(int sockfd, char *msg, size_t len) {
+  size_t total_sent = 0;
+  while (total_sent < len) {
+    ssize_t bytes = send(sockfd, msg + total_sent, len - total_sent, 0);
+    if (bytes == -1)
+      return -1;
+
+    total_sent += (size_t)bytes;
+  }
+  return (ssize_t)total_sent;
+}
+
+ssize_t recv_all(int sockfd, char *buf, size_t len) {
+  size_t total_received = 0;
+  while (total_received < len) {
+    ssize_t bytes = recv(sockfd, buf + total_received, len - total_received, 0);
+    if (bytes == 0)
+      return 0; // client disconnected
+
+    if (bytes == -1)
+      return -1; // error, check errno
+
+    total_received += (size_t)bytes;
+  }
+  return (ssize_t)total_received;
+}
 
 int main() {
   // Disable output buffering
@@ -15,8 +45,6 @@ int main() {
   // You can use print statements as follows for debugging, they'll be visible
   // when running tests.
   printf("Logs from your program will appear here!\n");
-
-  // Uncomment the code below to pass the first stage
 
   int server_fd, client_addr_len;
   struct sockaddr_in client_addr;
@@ -54,11 +82,35 @@ int main() {
   }
 
   printf("Waiting for a client to connect...\n");
-  client_addr_len = sizeof(client_addr);
+  client_addr_len = sizeof client_addr;
+  while (1) {
+    int client_fd = accept(server_fd, (struct sockaddr *)&client_addr,
+                           (socklen_t *)&client_addr_len);
+    if (client_fd == -1) {
 
-  accept(server_fd, (struct sockaddr *)&client_addr,
-         (socklen_t *)&client_addr_len);
-  printf("Client connected\n");
+      if (errno == EINTR)
+        // retry on signal interrupt
+        continue;
+
+      fprintf(stderr, "accept: %s\n", strerror(errno));
+      break;
+    }
+    char addr[INET6_ADDRSTRLEN];
+    inet_ntop(client_addr.sin_family, &(client_addr.sin_addr.s_addr), addr,
+              sizeof addr);
+    printf("Client connected from: %s\n", addr);
+
+    if (!fork()) {
+      close(server_fd);
+      char *msg = "+PONG\r\n";
+      if (send_all(client_fd, msg, strlen(msg)) == -1)
+        perror("send_all");
+
+      close(client_fd);
+      exit(0);
+    }
+    close(client_fd);
+  }
 
   close(server_fd);
 
