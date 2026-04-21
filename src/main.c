@@ -1,5 +1,6 @@
 #include "arpa/inet.h"
 #include "sys/types.h"
+#include <ctype.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -9,6 +10,10 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#include "encoder.h"
+#include "parser.h"
+#include "strlib.h"
 
 ssize_t send_all(int sockfd, char *msg, size_t len) {
   size_t total_sent = 0;
@@ -35,6 +40,31 @@ ssize_t recv_all(int sockfd, char *buf, size_t len) {
     total_received += (size_t)bytes;
   }
   return (ssize_t)total_received;
+}
+
+ssize_t receive(int sockfd, char *buf, size_t len) {
+  const char *terminator = "\r\n";
+
+  int param_count = 0;
+  int count;
+  char **tokens;
+  ssize_t bytes = 0;
+  do {
+    bytes = recv(sockfd, buf, len, 0);
+    if (bytes == 0)
+      return 0; // client disconnected
+
+    if (bytes == -1)
+      return -1; // error, check errno
+    char *first_line = parse_line(buf, terminator);
+    if (str_to_int(first_line + 1, &param_count) == 1) {
+      printf("Failed to convert string to int, invalid first line");
+    }
+    free(first_line);
+
+    tokens = split_str_by_str_terminator(buf, terminator, &count);
+  } while ((count - 1) / 2 < param_count);
+  return 1;
 }
 
 int main() {
@@ -103,7 +133,10 @@ int main() {
     if (!fork()) {
       close(server_fd);
       char buf[4096];
-      char *msg = "+PONG\r\n";
+      char *pong = "+PONG\r\n";
+      char **tokens;
+      int count = 0;
+      const char *terminator = "\r\n";
       while (1) {
         ssize_t status = recv(client_fd, buf, sizeof buf, 0);
         if (status == 0) {
@@ -114,11 +147,30 @@ int main() {
           perror("recv_all");
           continue;
         }
-        printf("received: %s", buf);
-
-        if (send_all(client_fd, msg, strlen(msg)) == -1)
-          perror("send_all");
+        tokens = split_str_by_str_terminator(buf, terminator, &count);
+        for (int i = 0; i < count; i++) {
+          printf("tokens[%d] = '%s'\n", i, tokens[i]);
+        }
+        char *to_upper = tokens[2];
+        str_to_upper(to_upper);
+        if (strcmp(to_upper, "PING") == 0) {
+          printf("received ping\n");
+          if (send_all(client_fd, pong, strlen(pong)) == -1)
+            perror("send_all");
+        } else if (strcmp(to_upper, "ECHO") == 0) {
+          if (count < 4) {
+            char *msg = "ECHO : argument missing";
+            printf("%s\n", msg);
+            if (send_all(client_fd, msg, strlen(msg)) == -1)
+              perror("send_all");
+            break;
+          }
+          char *msg = encode_bulk_str(tokens[4]);
+          if (send_all(client_fd, msg, strlen(msg)) == -1)
+            perror("send_all");
+        }
       }
+      free_split(tokens, count);
       close(client_fd);
       exit(0);
     }
