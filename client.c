@@ -22,6 +22,20 @@ ssize_t send_all(int sockfd, char *msg, size_t len) {
   return (ssize_t)total_sent;
 }
 
+ssize_t recv_all(int sockfd, char *buf, size_t len) {
+  size_t total_received = 0;
+  while (total_received < len) {
+    ssize_t bytes = recv(sockfd, buf + total_received, len - total_received, 0);
+    if (bytes == 0)
+      return 0; // client disconnected
+
+    if (bytes == -1)
+      return -1; // error, check errno
+
+    total_received += (size_t)bytes;
+  }
+  return (ssize_t)total_received;
+}
 int main(int argc, char **argv) {
   if (argc == 2 && (strcmp(argv[1], "-h") == 0)) {
     fprintf(stderr, "Local redis client\nusage: client <optional "
@@ -64,12 +78,40 @@ int main(int argc, char **argv) {
     return 1;
   }
   printf("Connected to redis server\n");
-
+  char buf[4096];
   char *msg = "*1\r\n$4\r\nPING\r\n";
   if (send_all(server_fd, msg, strlen(msg)) == -1) {
     perror("send_all");
     return 1;
   }
+  printf("message sent\n");
+  ssize_t bytes = recv(server_fd, buf, sizeof buf, 0);
+  if (bytes == 0) {
+    printf("server disconnected");
+    exit(1);
+  }
+  if (bytes == -1) {
+    perror("recv_all");
+  }
+  printf("received: %s\n", buf);
+  printf("sent once\n");
+  memset(buf, 0, sizeof buf);
+
+  if (send_all(server_fd, msg, strlen(msg)) == -1) {
+    perror("send_all");
+    return 1;
+  }
+
+  bytes = recv(server_fd, buf, sizeof buf, 0);
+  if (bytes == 0) {
+    printf("server disconnected\n");
+    exit(1);
+  }
+  if (bytes == -1) {
+    perror("recv_all");
+  }
+  printf("received: %s\n", buf);
+  printf("sent twice\n");
   close(server_fd);
   freeaddrinfo(res);
   return 0;

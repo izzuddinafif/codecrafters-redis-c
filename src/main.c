@@ -102,10 +102,23 @@ int main() {
 
     if (!fork()) {
       close(server_fd);
+      char buf[4096];
       char *msg = "+PONG\r\n";
-      if (send_all(client_fd, msg, strlen(msg)) == -1)
-        perror("send_all");
+      while (1) {
+        ssize_t status = recv(client_fd, buf, sizeof buf, 0);
+        if (status == 0) {
+          printf("Client %s disconnected\n", addr);
+          break;
+        }
+        if (status == -1) {
+          perror("recv_all");
+          continue;
+        }
+        printf("received: %s", buf);
 
+        if (send_all(client_fd, msg, strlen(msg)) == -1)
+          perror("send_all");
+      }
       close(client_fd);
       exit(0);
     }
