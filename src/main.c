@@ -14,6 +14,9 @@
 #include "encoder.h"
 #include "parser.h"
 #include "strlib.h"
+#include "table.h"
+
+#define TABLE_INIT_CAPACITY 8
 
 ssize_t send_all(int sockfd, char *msg, size_t len) {
   size_t total_sent = 0;
@@ -113,6 +116,9 @@ int main() {
 
   printf("Waiting for a client to connect...\n");
   client_addr_len = sizeof client_addr;
+  Table t;
+  Table *table = &t;
+  table_init(table, TABLE_INIT_CAPACITY);
   while (1) {
     int client_fd = accept(server_fd, (struct sockaddr *)&client_addr,
                            (socklen_t *)&client_addr_len);
@@ -153,21 +159,64 @@ int main() {
         }
         char *to_upper = tokens[2];
         str_to_upper(to_upper);
+        char *msg;
         if (strcmp(to_upper, "PING") == 0) {
           printf("received ping\n");
           if (send_all(client_fd, pong, strlen(pong)) == -1)
             perror("send_all");
         } else if (strcmp(to_upper, "ECHO") == 0) {
-          if (count < 4) {
-            char *msg = "ECHO : argument missing";
+          if (count < 5) {
+            msg = "ECHO: argument missing";
             printf("%s\n", msg);
             if (send_all(client_fd, msg, strlen(msg)) == -1)
               perror("send_all");
             break;
           }
-          char *msg = encode_bulk_str(tokens[4]);
+          msg = encode_bulk_str(tokens[4]);
           if (send_all(client_fd, msg, strlen(msg)) == -1)
             perror("send_all");
+          free(msg);
+        } else if (strcmp(to_upper, "SET") == 0) {
+          if (count < 7) {
+            msg = "SET: argument missing";
+            printf("%s\n", msg);
+            if (send_all(client_fd, msg, strlen(msg)) == -1)
+              perror("send_all");
+            break;
+          }
+          if (table_set(table, tokens[4], tokens[6]) != 0) {
+            printf("table_set error\n");
+            msg = encode_bulk_str("-ERORR");
+            if (send_all(client_fd, msg, strlen(msg)) == -1)
+              perror("send_all");
+            break;
+          }
+          msg = "+OK\r\n";
+          if (send_all(client_fd, msg, strlen(msg)) == -1)
+            perror("send_all");
+          break;
+        } else if (strcmp(to_upper, "GET") == 0) {
+          if (count < 5) {
+            msg = "GET: argument missing";
+            printf("%s\n", msg);
+            if (send_all(client_fd, msg, strlen(msg)) == -1)
+              perror("send_all");
+            break;
+          }
+          char *result = table_get(table, tokens[4]);
+          if (!result) {
+            msg = "Key not found";
+            printf("%s\n", msg);
+            msg = "$-1\r\n";
+            if (send_all(client_fd, msg, strlen(msg)) == -1)
+              perror("send_all");
+            break;
+          }
+          msg = encode_bulk_str(result);
+          if (send_all(client_fd, msg, strlen(msg)) == -1)
+            perror("send_all");
+          free(result);
+          break;
         }
       }
       free_split(tokens, count);
